@@ -1,71 +1,85 @@
 const express = require('express');
 const { google } = require('googleapis');
-const fs = require('fs');
+const crypto = require('crypto'); // for webhook signature check
 
 const app = express();
 app.use(express.json());
 
-// REPLACE THESE
-const FOLDER_ID = 'https://drive.google.com/drive/u/0/folders/1x-285UpemCCE-SXoQDhugeN893IW06df'; // from Step 1
-const WEBHOOK_SECRET = 'whsk_RHm1B67RkMK2o4EwoUsqJv4Q';
+// === CONFIG - REPLACE THESE ===
+const PAYMONGO_WEBHOOK_SECRET = 'whsk_RHm1B67RkMK2o4EwoUsqJv4Q'; // From PayMongo webhook settings
+const GOOGLE_FOLDER_ID = '1AbCdEfGhIjKlMnOpQrStUvWxYz'; // Your Drive folder ID
+// credentials.json should be uploaded as a file in Render (see step 3)
 
-// Load Google credentials (upload credentials.json to Render as environment file or secret)
-const auth = new google.auth.GoogleAuth({
-  keyFile: './credentials.json', // or use env vars
-  scopes: ['https://www.googleapis.com/auth/drive']
-});
+// Google Drive setup
+let drive;
+(async () => {
+  const auth = new google.auth.GoogleAuth({
+    keyFilename: './credentials.json', // Render will have this file
+    scopes: ['https://www.googleapis.com/auth/drive'],
+  });
+  drive = google.drive({ version: 'v3', auth });
+})();
 
-const drive = google.drive({ version: 'v3', auth });
-
-// PayMongo Webhook – Payment Confirmed → Add Email
-app.post('/webhook', async (req, res) => {
+// === PAYMONGO WEBHOOK ENDPOINT ===
+app.post('/webhook', (req, res) => {
+  // Verify signature (PayMongo sends 'paymongo-signature' header)
   const signature = req.headers['paymongo-signature'];
-  // Basic secret check (improve later)
-  if (req.body.data.attributes.secret !== WEBHOOK_SECRET) {
-    return res.status(401).send('Invalid');
+  if (!signature) return res.status(401).send('No signature');
+
+  // PayMongo uses HMAC-SHA256 with your webhook secret
+  const computedSig = crypto
+    .createHmac('sha256', PAYMONGO_WEBHOOK_SECRET)
+    .update(JSON.stringify(req.body))
+    .digest('hex');
+
+  if (computedSig !== signature) {
+    console.log('Invalid signature');
+    return res.status(401).send('Invalid signature');
   }
 
-  if (req.body.data.attributes.event === 'payment.paid') {
-    const email = req.body.data.attributes.data.attributes.email; // if you pass email in metadata
-    if (email && email.endsWith('@gmail.com')) {
-      try {
-        await drive.permissions.create({
-          fileId: FOLDER_ID,
-          requestBody: {
-            role: 'reader',
-            type: 'user',
-            emailAddress: email
-          }
-        });
-        console.log(`Added ${email} to Drive`);
-      } catch (e) {
-        console.error(e);
-      }
-    }
+  const event = req.body.data.attributes.event;
+
+  if (event === 'payment.paid' || event === 'payment.succeeded') {
+    // PayMongo doesn't send email by default — you must pass it in metadata when creating payment
+    // For now, log it — later we'll add metadata handling
+    const paymentData = req.body.data.attributes.data.attributes;
+    console.log('Payment success:', paymentData);
+
+    // If you passed email in metadata during payment creation:
+    // const email = paymentData.metadata?.customer_email;
+    // if (email && email.endsWith('@gmail.com')) {
+    //   addToDrive(email);
+    // }
   }
-  res.sendStatus(200);
+
+  res.sendStatus(200); // Always 200 to acknowledge
 });
 
-// Frontend form submit – Manual trigger if no webhook email
+// === MANUAL ADD EMAIL (from your HTML form) ===
 app.post('/add-email', async (req, res) => {
   const { email } = req.body;
   if (!email || !email.endsWith('@gmail.com')) {
-    return res.json({ success: false, message: 'Invalid email' });
+    return res.json({ success: false, message: 'Invalid Gmail' });
   }
 
   try {
     await drive.permissions.create({
-      fileId: FOLDER_ID,
+      fileId: GOOGLE_FOLDER_ID,
       requestBody: {
         role: 'reader',
         type: 'user',
-        emailAddress: email
-      }
+        emailAddress: email,
+      },
+      fields: 'id',
     });
-    res.json({ success: true });
-  } catch (e) {
-    res.json({ success: false, message: e.message });
+    console.log(`Added ${email} to Drive folder`);
+    res.json({ success: true, message: 'Access granted! Check Drive or Messenger for link.' });
+  } catch (err) {
+    console.error('Drive error:', err);
+    res.json({ success: false, message: 'Failed to add access. Message us.' });
   }
 });
 
-app.listen(process.env.PORT || 3000, () => console.log('Server running'));
+// Start server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
