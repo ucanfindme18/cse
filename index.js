@@ -6,8 +6,8 @@ const app = express();
 app.use(express.json());
 
 // REPLACE THESE
-const FOLDER_ID = 'YOUR_FOLDER_ID_HERE'; // from Step 1
-const WEBHOOK_SECRET = 'your_paymongo_webhook_secret_here';
+const FOLDER_ID = 'https://drive.google.com/drive/u/0/folders/1x-285UpemCCE-SXoQDhugeN893IW06df'; // from Step 1
+const WEBHOOK_SECRET = 'whsk_RHm1B67RkMK2o4EwoUsqJv4Q';
 
 // Load Google credentials (upload credentials.json to Render as environment file or secret)
 const auth = new google.auth.GoogleAuth({
